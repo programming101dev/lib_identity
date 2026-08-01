@@ -20,6 +20,7 @@ static int failures;
 struct fault_state
 {
     int checks;
+    int errnum;
 };
 
 static int fail_next_call(const struct p101_env *env, const char *call_name, void *user_data)
@@ -30,202 +31,384 @@ static int fail_next_call(const struct p101_env *env, const char *call_name, voi
     (void)call_name;
     state = user_data;
     state->checks++;
-    return EIO;
+    return state->errnum;
 }
 
 /* P101_TEST_CASE(p101_crypt) */
 static void test_p101_crypt(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EINVAL, ENOSYS, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EIO};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EIO};
+#else
+    static const int errors[] = {ENOSYS};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    char *result = p101_crypt(env, err, NULL, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        char *result = p101_crypt(env, err, NULL, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getgrgid_r) */
 static void test_p101_getgrgid_r(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
+#elif defined(__APPLE__)
+    static const int errors[] = {EIO};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EIO};
+#else
+    static const int errors[] = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getgrgid_r(env, err, 0, NULL, NULL, 0, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getgrgid_r(env, err, 0, NULL, NULL, 0, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getgrnam_r) */
 static void test_p101_getgrnam_r(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
+#elif defined(__APPLE__)
+    static const int errors[] = {EIO};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EIO};
+#else
+    static const int errors[] = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getgrnam_r(env, err, NULL, NULL, NULL, 0, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getgrnam_r(env, err, NULL, NULL, NULL, 0, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getgroups) */
 static void test_p101_getgroups(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EFAULT, EINVAL, ENOMEM, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EFAULT, EINVAL};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EFAULT, EINVAL};
+#else
+    static const int errors[] = {EINVAL};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getgroups(env, err, 0, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getgroups(env, err, 0, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getlogin_r) */
 static void test_p101_getlogin_r(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EMFILE, ENFILE, ENOENT, ENOMEM, ENOTTY, ENXIO, ERANGE};
+#elif defined(__APPLE__)
+    static const int errors[] = {EMFILE, ENFILE, ENOTTY, ENXIO, ERANGE};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EFAULT, EINVAL, EPERM, ERANGE};
+#else
+    static const int errors[] = {EMFILE, ENFILE, ENOTTY, ENXIO, ERANGE};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getlogin_r(env, err, NULL, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getlogin_r(env, err, NULL, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getpwnam_r) */
 static void test_p101_getpwnam_r(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
+#elif defined(__APPLE__)
+    static const int errors[] = {ERANGE};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {ERANGE};
+#else
+    static const int errors[] = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getpwnam_r(env, err, NULL, NULL, NULL, 0, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getpwnam_r(env, err, NULL, NULL, NULL, 0, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_getpwuid_r) */
 static void test_p101_getpwuid_r(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
+#elif defined(__APPLE__)
+    static const int errors[] = {ERANGE};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {ERANGE};
+#else
+    static const int errors[] = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_getpwuid_r(env, err, 0, NULL, NULL, 0, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_getpwuid_r(env, err, 0, NULL, NULL, 0, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_pututxline) */
 static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {ENOMEM, ESRCH};
+#elif defined(__APPLE__)
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EINVAL, ESRCH};
+#else
+    static const int errors[] = {EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    struct utmpx *result = p101_pututxline(env, err, NULL);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        struct utmpx *result = p101_pututxline(env, err, NULL);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_setegid) */
 static void test_p101_setegid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_setegid(env, err, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_setegid(env, err, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_seteuid) */
 static void test_p101_seteuid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_seteuid(env, err, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_seteuid(env, err, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_setgid) */
 static void test_p101_setgid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_setgid(env, err, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_setgid(env, err, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_setregid) */
 static void test_p101_setregid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EAGAIN, EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_setregid(env, err, 0, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_setregid(env, err, 0, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_setreuid) */
 static void test_p101_setreuid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EAGAIN, EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_setreuid(env, err, 0, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_setreuid(env, err, 0, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
 /* P101_TEST_CASE(p101_setuid) */
 static void test_p101_setuid(struct p101_env *env, struct p101_error *err)
 {
-    struct fault_state state = {0};
+#ifdef __linux__
+    static const int errors[] = {EAGAIN, EINVAL, EPERM};
+#elif defined(__APPLE__)
+    static const int errors[] = {EINVAL, EPERM};
+#elif defined(__FreeBSD__)
+    static const int errors[] = {EPERM};
+#else
+    static const int errors[] = {EINVAL, EPERM};
+#endif
 
-    p101_env_set_fault_injector(env, fail_next_call, &state);
-    int result = p101_setuid(env, err, 0);
-    (void)result;
-    EXPECT(state.checks == 1);
-    EXPECT(p101_error_has_error(err));
-    p101_error_reset(err);
+    for(size_t index = 0U; index < sizeof(errors) / sizeof(errors[0]); index++)
+    {
+        struct fault_state state = {0, errors[index]};
+
+        p101_env_set_fault_injector(env, fail_next_call, &state);
+        int result = p101_setuid(env, err, 0);
+        (void)result;
+        EXPECT(state.checks == 1);
+        EXPECT(p101_error_is_errno(err, state.errnum));
+        p101_error_reset(err);
+    }
     p101_env_set_fault_injector(env, NULL, NULL);
 }
 
