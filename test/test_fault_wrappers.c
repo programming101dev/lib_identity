@@ -2,8 +2,10 @@
 #include <p101_env/env.h>
 #include <p101_error/error.h>
 #include <p101_identity/identity.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int failures;
 
@@ -119,7 +121,7 @@ static void test_p101_getgrnam_r(struct p101_env *env, struct p101_error *err)
 static void test_p101_getgroups(struct p101_env *env, struct p101_error *err)
 {
 #ifdef __linux__
-    static const int errors[] = {EFAULT, EINVAL, ENOMEM, EPERM};
+    static const int errors[] = {EFAULT, EINVAL};
 #elif defined(__APPLE__)
     static const int errors[] = {EFAULT, EINVAL};
 #elif defined(__FreeBSD__)
@@ -227,7 +229,7 @@ static void test_p101_getpwuid_r(struct p101_env *env, struct p101_error *err)
 static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
 {
 #ifdef __linux__
-    static const int errors[] = {ENOMEM, ESRCH};
+    static const int errors[] = {EIO};
 #elif defined(__APPLE__)
     static const int errors[] = {EINVAL, EPERM};
 #elif defined(__FreeBSD__)
@@ -254,7 +256,7 @@ static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
 static void test_p101_setegid(struct p101_env *env, struct p101_error *err)
 {
 #ifdef __linux__
-    static const int errors[] = {EINVAL, EPERM};
+    static const int errors[] = {EINVAL};
 #elif defined(__APPLE__)
     static const int errors[] = {EINVAL, EPERM};
 #elif defined(__FreeBSD__)
