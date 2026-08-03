@@ -32,6 +32,5 @@ set(p101_identity_HEADERS
 set(p101_identity_LINK_LIBRARIES
         p101_error
         p101_env
-        p101_tool_event
         p101_c
 )
