@@ -23,7 +23,7 @@ int p101_getpwnam_r(const struct p101_env *env, struct p101_error *err, const ch
     int ret_val;
 
     P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err);
+    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
     errno   = 0;
     ret_val = getpwnam_r(name, pwd, buffer, bufsize, result);
 
@@ -32,7 +32,7 @@ int p101_getpwnam_r(const struct p101_env *env, struct p101_error *err, const ch
         P101_ERROR_RAISE_ERRNO(err, ret_val);
     }
 
-    P101_TRACE_EXIT(env);
+    P101_WRAPPER_DONE(env);
     return ret_val;
 }
 
@@ -41,7 +41,7 @@ int p101_getpwuid_r(const struct p101_env *env, struct p101_error *err, uid_t ui
     int ret_val;
 
     P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err);
+    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
     errno   = 0;
     ret_val = getpwuid_r(uid, pwd, buffer, bufsize, result);
 
@@ -50,6 +50,6 @@ int p101_getpwuid_r(const struct p101_env *env, struct p101_error *err, uid_t ui
         P101_ERROR_RAISE_ERRNO(err, ret_val);
     }
 
-    P101_TRACE_EXIT(env);
+    P101_WRAPPER_DONE(env);
     return ret_val;
 }

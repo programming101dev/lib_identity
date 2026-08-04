@@ -122,11 +122,11 @@ static void test_p101_crypt(struct p101_env *env, struct p101_error *err)
     static const int         errors[]      = {EINVAL, ENOSYS, EPERM};
     static const char *const error_names[] = {"EINVAL", "ENOSYS", "EPERM"};
 #elif defined(__APPLE__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {ENOSYS};
+    static const char *const error_names[] = {"ENOSYS"};
 #elif defined(__FreeBSD__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {ENOSYS};
+    static const char *const error_names[] = {"ENOSYS"};
 #else
     static const int         errors[]      = {ENOSYS};
     static const char *const error_names[] = {"ENOSYS"};
@@ -166,11 +166,11 @@ static void test_p101_getgrgid_r(struct p101_env *env, struct p101_error *err)
     static const int         errors[]      = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
     static const char *const error_names[] = {"EBADF", "EINTR", "EIO", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "EPERM", "ERANGE", "ESRCH"};
 #elif defined(__APPLE__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+    static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
 #elif defined(__FreeBSD__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+    static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
 #else
     static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
     static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
@@ -211,11 +211,11 @@ static void test_p101_getgrnam_r(struct p101_env *env, struct p101_error *err)
     static const int         errors[]      = {EBADF, EINTR, EIO, EMFILE, ENFILE, ENOENT, ENOMEM, EPERM, ERANGE, ESRCH};
     static const char *const error_names[] = {"EBADF", "EINTR", "EIO", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "EPERM", "ERANGE", "ESRCH"};
 #elif defined(__APPLE__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+    static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
 #elif defined(__FreeBSD__)
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
+    static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
 #else
     static const int         errors[]      = {EINTR, EIO, EMFILE, ENFILE, ERANGE};
     static const char *const error_names[] = {"EINTR", "EIO", "EMFILE", "ENFILE", "ERANGE"};
@@ -429,8 +429,8 @@ static void test_p101_getpwuid_r(struct p101_env *env, struct p101_error *err)
 static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
 {
 #ifdef __linux__
-    static const int         errors[]      = {EIO};
-    static const char *const error_names[] = {"EIO"};
+    static const int         errors[]      = {EPERM};
+    static const char *const error_names[] = {"EPERM"};
 #elif defined(__APPLE__)
     static const int         errors[]      = {EINVAL, EPERM};
     static const char *const error_names[] = {"EINVAL", "EPERM"};

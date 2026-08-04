@@ -10,7 +10,7 @@ char *p101_crypt(const struct p101_env *env, struct p101_error *err, const char 
     char *ret_val;
 
     P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN(env, err, NULL);
+    P101_WRAPPER_FAULT_RETURN(env, err, ret_val, NULL);
     errno   = 0;
     ret_val = crypt(key, salt);    // cppcheck-suppress cryptCalled
 
@@ -19,7 +19,7 @@ char *p101_crypt(const struct p101_env *env, struct p101_error *err, const char 
         P101_ERROR_RAISE_ERRNO(err, (errno == 0) ? EIO : errno);
     }
 
-    P101_TRACE_EXIT(env);
+    P101_WRAPPER_DONE(env);
     return ret_val;
 }
 
@@ -28,7 +28,7 @@ int p101_setregid(const struct p101_env *env, struct p101_error *err, gid_t rgid
     int ret_val;
 
     P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN(env, err, -1);
+    P101_WRAPPER_FAULT_RETURN(env, err, ret_val, -1);
     errno   = 0;
     ret_val = setregid(rgid, egid);
 
@@ -37,7 +37,7 @@ int p101_setregid(const struct p101_env *env, struct p101_error *err, gid_t rgid
         P101_ERROR_RAISE_ERRNO(err, errno);
     }
 
-    P101_TRACE_EXIT(env);
+    P101_WRAPPER_DONE(env);
     return ret_val;
 }
 
@@ -46,7 +46,7 @@ int p101_setreuid(const struct p101_env *env, struct p101_error *err, uid_t ruid
     int ret_val;
 
     P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN(env, err, -1);
+    P101_WRAPPER_FAULT_RETURN(env, err, ret_val, -1);
     errno   = 0;
     ret_val = setreuid(ruid, euid);
 
@@ -55,6 +55,6 @@ int p101_setreuid(const struct p101_env *env, struct p101_error *err, uid_t ruid
         P101_ERROR_RAISE_ERRNO(err, errno);
     }
 
-    P101_TRACE_EXIT(env);
+    P101_WRAPPER_DONE(env);
     return ret_val;
 }
