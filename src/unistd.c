@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2024 D'Arcy Smith.
+ * Copyright 2026 D'Arcy Smith.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,98 +14,11 @@
  * limitations under the License.
  */
 
-#include "p101_identity/identity.h"
+#include "p101_identity/p101_grp.h"
+#include "p101_identity/p101_pwd.h"
+#include "p101_identity/p101_unistd.h"
+#include "p101_identity/p101_utmpx.h"
 #include <p101_env/wrapper.h>
-
-int p101_getgrgid_r(const struct p101_env *env, struct p101_error *err, gid_t gid, struct group *grp, char *buffer, size_t bufsize, struct group **result)
-{
-    int ret_val;
-
-    P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
-    errno   = 0;
-    ret_val = getgrgid_r(gid, grp, buffer, bufsize, result);
-
-    if(ret_val != 0)
-    {
-        P101_ERROR_RAISE_ERRNO(err, ret_val);
-    }
-
-    P101_WRAPPER_DONE(env);
-    return ret_val;
-}
-
-int p101_getgrnam_r(const struct p101_env *env, struct p101_error *err, const char *name, struct group *grp, char *buffer, size_t bufsize, struct group **result)
-{
-    int ret_val;
-
-    P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
-    errno   = 0;
-    ret_val = getgrnam_r(name, grp, buffer, bufsize, result);
-
-    if(ret_val != 0)
-    {
-        P101_ERROR_RAISE_ERRNO(err, ret_val);
-    }
-
-    P101_WRAPPER_DONE(env);
-    return ret_val;
-}
-
-/*
- * Copyright 2021-2024 D'Arcy Smith.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-#include <pwd.h>
-
-int p101_getpwnam_r(const struct p101_env *env, struct p101_error *err, const char *name, struct passwd *pwd, char *buffer, size_t bufsize, struct passwd **result)
-{
-    int ret_val;
-
-    P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
-    errno   = 0;
-    ret_val = getpwnam_r(name, pwd, buffer, bufsize, result);
-
-    if(ret_val != 0)
-    {
-        P101_ERROR_RAISE_ERRNO(err, ret_val);
-    }
-
-    P101_WRAPPER_DONE(env);
-    return ret_val;
-}
-
-int p101_getpwuid_r(const struct p101_env *env, struct p101_error *err, uid_t uid, struct passwd *pwd, char *buffer, size_t bufsize, struct passwd **result)
-{
-    int ret_val;
-
-    P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN_CODE(env, err, ret_val);
-    errno   = 0;
-    ret_val = getpwuid_r(uid, pwd, buffer, bufsize, result);
-
-    if(ret_val != 0)
-    {
-        P101_ERROR_RAISE_ERRNO(err, ret_val);
-    }
-
-    P101_WRAPPER_DONE(env);
-    return ret_val;
-}
 
 /*
  * Copyright 2021-2024 D'Arcy Smith.
@@ -336,94 +249,6 @@ int p101_setreuid(const struct p101_env *env, struct p101_error *err, uid_t ruid
 
     P101_WRAPPER_DONE(env);
     return ret_val;
-}
-
-#include <utmpx.h>
-
-static int utmpx_error_code(void);
-
-static int utmpx_error_code(void)
-{
-    int err_code;
-
-    err_code = errno;
-
-    if(err_code == 0)
-    {
-        err_code = EIO;
-    }
-
-    return err_code;
-}
-
-void p101_endutxent(const struct p101_env *env)
-{
-    P101_TRACE(env);
-    errno = 0;
-    endutxent();
-    P101_TRACE_EXIT(env);
-}
-
-struct utmpx *p101_getutxent(const struct p101_env *env)
-{
-    struct utmpx *ret_val;
-
-    P101_TRACE(env);
-    errno   = 0;
-    ret_val = getutxent();
-
-    P101_TRACE_EXIT(env);
-    return ret_val;
-}
-
-struct utmpx *p101_getutxid(const struct p101_env *env, const struct utmpx *id)
-{
-    struct utmpx *ret_val;
-
-    P101_TRACE(env);
-    errno   = 0;
-    ret_val = getutxid(id);
-
-    P101_TRACE_EXIT(env);
-    return ret_val;
-}
-
-struct utmpx *p101_getutxline(const struct p101_env *env, const struct utmpx *line)
-{
-    struct utmpx *ret_val;
-
-    P101_TRACE(env);
-    errno   = 0;
-    ret_val = getutxline(line);
-
-    P101_TRACE_EXIT(env);
-    return ret_val;
-}
-
-struct utmpx *p101_pututxline(const struct p101_env *env, struct p101_error *err, const struct utmpx *utmpx)
-{
-    struct utmpx *ret_val;
-
-    P101_TRACE(env);
-    P101_WRAPPER_FAULT_RETURN(env, err, ret_val, NULL);
-    errno   = 0;
-    ret_val = pututxline(utmpx);
-
-    if(ret_val == NULL)
-    {
-        P101_ERROR_RAISE_ERRNO(err, utmpx_error_code());
-    }
-
-    P101_WRAPPER_DONE(env);
-    return ret_val;
-}
-
-void p101_setutxent(const struct p101_env *env)
-{
-    P101_TRACE(env);
-    errno = 0;
-    setutxent();
-    P101_TRACE_EXIT(env);
 }
 
 /*

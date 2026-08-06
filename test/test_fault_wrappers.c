@@ -10,7 +10,10 @@
 #include <netinet/in.h>
 #include <p101_env/env.h>
 #include <p101_error/error.h>
-#include <p101_identity/identity.h>
+#include <p101_identity/p101_grp.h>
+#include <p101_identity/p101_pwd.h>
+#include <p101_identity/p101_unistd.h>
+#include <p101_identity/p101_utmpx.h>
 #include <pthread.h>
 #include <search.h>
 #include <signal.h>

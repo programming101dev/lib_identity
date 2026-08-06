@@ -19,10 +19,16 @@ set(BSD_STANDARD_FLAGS -D_BSD_SOURCE -D__BSD_VISIBLE)
 
 set(LIBRARY_TARGETS p101_identity)
 set(p101_identity_SOURCES
-        src/identity.c
+        src/grp.c
+        src/pwd.c
+        src/unistd.c
+        src/utmpx.c
 )
 set(p101_identity_HEADERS
-        include/p101_identity/identity.h
+        include/p101_identity/p101_grp.h
+        include/p101_identity/p101_pwd.h
+        include/p101_identity/p101_unistd.h
+        include/p101_identity/p101_utmpx.h
 )
 set(p101_identity_LINK_LIBRARIES
         p101_error
