@@ -15,9 +15,6 @@
  */
 
 #include "p101_identity/p101_grp.h"
-#include "p101_identity/p101_pwd.h"
-#include "p101_identity/p101_unistd.h"
-#include "p101_identity/p101_utmpx.h"
 #include <p101_env/wrapper.h>
 
 /*
