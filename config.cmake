@@ -19,12 +19,7 @@ set(BSD_STANDARD_FLAGS -D_BSD_SOURCE -D__BSD_VISIBLE)
 
 set(LIBRARY_TARGETS p101_identity)
 set(p101_identity_SOURCES
-        src/posix/grp.c
-        src/posix/pwd.c
-        src/posix/unistd.c
-        src/posix_xsi/unistd.c
-        src/posix_xsi/utmpx.c
-        src/unix/unistd.c
+        src/identity.c
 )
 set(p101_identity_HEADERS
         include/p101_identity/identity.h

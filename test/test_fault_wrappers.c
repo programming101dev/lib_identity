@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <fmtmsg.h>
 #include <fnmatch.h>
 #include <ftw.h>
@@ -13,6 +14,7 @@
 #include <search.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +28,8 @@
 static int    failures;
 static size_t fault_resource_events;
 static FILE  *outcome_stream;
+static bool   native_child_process;
+static int    native_child_status = EXIT_SUCCESS;
 
 #define P101_TEST_ERRNO_SENTINEL 0x5A5A
 
@@ -49,25 +53,82 @@ static FILE  *outcome_stream;
         }                                                                                                                                                                                                                                                          \
     } while(0)
 
+#define P101_NATIVE_CLEANUP_ERRNO(expression)                                                                                                                                                                                                                      \
+    do                                                                                                                                                                                                                                                             \
+    {                                                                                                                                                                                                                                                              \
+        if((expression) != 0)                                                                                                                                                                                                                                      \
+        {                                                                                                                                                                                                                                                          \
+            fprintf(stderr, "native cleanup failed: %s: %s\n", #expression, strerror(errno));                                                                                                                                                                      \
+            native_passed = false;                                                                                                                                                                                                                                 \
+        }                                                                                                                                                                                                                                                          \
+    } while(0)
+
+#define P101_NATIVE_CLEANUP_STATUS(expression)                                                                                                                                                                                                                     \
+    do                                                                                                                                                                                                                                                             \
+    {                                                                                                                                                                                                                                                              \
+        int p101_cleanup_status_ = (expression);                                                                                                                                                                                                                   \
+        if(p101_cleanup_status_ != 0)                                                                                                                                                                                                                              \
+        {                                                                                                                                                                                                                                                          \
+            fprintf(stderr, "native cleanup failed: %s: status %d\n", #expression, p101_cleanup_status_);                                                                                                                                                          \
+            native_passed = false;                                                                                                                                                                                                                                 \
+        }                                                                                                                                                                                                                                                          \
+    } while(0)
+
+#define P101_NATIVE_CLEANUP_UNLINK_IF_PRESENT(path)                                                                                                                                                                                                                \
+    do                                                                                                                                                                                                                                                             \
+    {                                                                                                                                                                                                                                                              \
+        bool p101_cleanup_ok_;                                                                                                                                                                                                                                     \
+                                                                                                                                                                                                                                                                   \
+        p101_cleanup_ok_ = native_unlink_if_present(path);                                                                                                                                                                                                         \
+        if(!p101_cleanup_ok_)                                                                                                                                                                                                                                      \
+        {                                                                                                                                                                                                                                                          \
+            native_passed = false;                                                                                                                                                                                                                                 \
+        }                                                                                                                                                                                                                                                          \
+    } while(0)
+
+#define P101_NATIVE_FORMAT_PID_PATH_OR_SKIP(buffer, format)                                                                                                                                                                                                        \
+    do                                                                                                                                                                                                                                                             \
+    {                                                                                                                                                                                                                                                              \
+        int p101_format_length_;                                                                                                                                                                                                                                   \
+                                                                                                                                                                                                                                                                   \
+        p101_format_length_ = snprintf((buffer), sizeof(buffer), (format), (long)getpid());                                                                                                                                                                        \
+        if(p101_format_length_ < 0 || (size_t)p101_format_length_ >= sizeof(buffer))                                                                                                                                                                               \
+        {                                                                                                                                                                                                                                                          \
+            fprintf(stderr, "native setup failed: path formatting\n");                                                                                                                                                                                             \
+            native_child_status = 77;                                                                                                                                                                                                                              \
+            goto native_child_done_;                                                                                                                                                                                                                               \
+        }                                                                                                                                                                                                                                                          \
+    } while(0)
+
 struct fault_state
 {
     int checks;
     int code;
 };
 
+static pid_t native_waitpid_nointr(pid_t pid, int *status) P101_ATTR_SEMANTIC_ROLE("p101:test:eintr-safe-wait-adapter")
+{
+    pid_t result;
+
+    do
+    {
+        result = waitpid(pid, status, 0);
+    } while(result < 0 && errno == EINTR);
+    return result;
+}
+
 static void write_outcome(const char *wrapper, const char *domain, const char *symbol, int code, int passed)
 {
     int written;
 
-    if(outcome_stream == NULL)
+    if(outcome_stream != NULL)
     {
-        return;
-    }
-    written = fprintf(outcome_stream, "P101WRAPPER\t1\tFAULT\t%s\tlib_identity\t%s\t%s\t%s\t%d\t%s\n", P101_TEST_PLATFORM, wrapper, domain, symbol, code, passed ? "PASS" : "FAIL");
-    if(written < 0 || fflush(outcome_stream) != 0)
-    {
-        fprintf(stderr, "FAIL: cannot write wrapper outcome receipt\n");
-        failures++;
+        written = fprintf(outcome_stream, "P101WRAPPER\t1\tFAULT\t%s\tlib_identity\t%s\t%s\t%s\t%d\t%s\n", P101_TEST_PLATFORM, wrapper, domain, symbol, code, passed ? "PASS" : "FAIL");
+        if(written < 0 || fflush(outcome_stream) != 0)
+        {
+            fprintf(stderr, "FAIL: cannot write wrapper outcome receipt\n");
+            failures++;
+        }
     }
 }
 
@@ -170,35 +231,57 @@ static void test_p101_crypt(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             char *native_result = p101_crypt(native_env, native_err, "p101", "p101");
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_crypt: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_crypt: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_crypt: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -256,38 +339,60 @@ static void test_p101_getgrgid_r(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             struct group  native_argument_3           = {0};
             char          native_argument_4[PATH_MAX] = {0};
             struct group *native_argument_6           = NULL;
             int           native_result               = p101_getgrgid_r(native_env, native_err, 0, &native_argument_3, native_argument_4, 0, &native_argument_6);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getgrgid_r: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getgrgid_r: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getgrgid_r: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -345,38 +450,60 @@ static void test_p101_getgrnam_r(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             struct group  native_argument_3           = {0};
             char          native_argument_4[PATH_MAX] = {0};
             struct group *native_argument_6           = NULL;
             int           native_result               = p101_getgrnam_r(native_env, native_err, "p101", &native_argument_3, native_argument_4, 0, &native_argument_6);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getgrnam_r: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getgrnam_r: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getgrnam_r: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -434,36 +561,58 @@ static void test_p101_getgroups(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             gid_t native_argument_3 = {0};
             int   native_result     = p101_getgroups(native_env, native_err, 0, &native_argument_3);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getgroups: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getgroups: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getgroups: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -521,36 +670,58 @@ static void test_p101_getlogin_r(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             char native_argument_2[PATH_MAX] = {0};
             int  native_result               = p101_getlogin_r(native_env, native_err, native_argument_2, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getlogin_r: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getlogin_r: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getlogin_r: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -608,38 +779,60 @@ static void test_p101_getpwnam_r(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             struct passwd  native_argument_3           = {0};
             char           native_argument_4[PATH_MAX] = {0};
             struct passwd *native_argument_6           = NULL;
             int            native_result               = p101_getpwnam_r(native_env, native_err, "p101", &native_argument_3, native_argument_4, 0, &native_argument_6);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getpwnam_r: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getpwnam_r: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getpwnam_r: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -697,38 +890,60 @@ static void test_p101_getpwuid_r(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             struct passwd  native_argument_3           = {0};
             char           native_argument_4[PATH_MAX] = {0};
             struct passwd *native_argument_6           = NULL;
             int            native_result               = p101_getpwuid_r(native_env, native_err, 0, &native_argument_3, native_argument_4, 0, &native_argument_6);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_getpwuid_r: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_getpwuid_r: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_getpwuid_r: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -781,36 +996,58 @@ static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             struct utmpx  native_argument_2 = {0};
             struct utmpx *native_result     = p101_pututxline(native_env, native_err, &native_argument_2);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_pututxline: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_pututxline: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_pututxline: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -863,35 +1100,57 @@ static void test_p101_setegid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_setegid(native_env, native_err, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_setegid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_setegid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_setegid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -944,35 +1203,57 @@ static void test_p101_seteuid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_seteuid(native_env, native_err, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_seteuid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_seteuid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_seteuid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -1025,35 +1306,57 @@ static void test_p101_setgid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_setgid(native_env, native_err, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_setgid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_setgid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_setgid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -1106,35 +1409,57 @@ static void test_p101_setregid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_setregid(native_env, native_err, 0, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_setregid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_setregid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_setregid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -1187,35 +1512,57 @@ static void test_p101_setreuid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_setreuid(native_env, native_err, 0, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_setreuid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_setreuid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_setreuid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -1268,35 +1615,57 @@ static void test_p101_setuid(struct p101_env *env, struct p101_error *err)
         EXPECT(native_pid >= 0);
         if(native_pid == 0)
         {
-            struct p101_error *native_err;
-            struct p101_env   *native_env;
+            bool               native_passed = true;
+            struct p101_error *native_err    = NULL;
+            struct p101_env   *native_env    = NULL;
 
+            native_child_process = true;
+            failures             = 0;
             (void)alarm(2U);
-            (void)unsetenv("P101_CALL_LOG");
-            (void)unsetenv("P101_RESOURCE_LOG");
+            if(unsetenv("P101_CALL_LOG") != 0 || unsetenv("P101_RESOURCE_LOG") != 0)
+            {
+                fprintf(stderr, "native setup failed: cannot clear p101 logging environment\n");
+                native_child_status = 77;
+                goto native_child_done_;
+            }
             native_err = p101_error_create(false);
             if(native_err == NULL)
             {
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             native_env = p101_env_create(native_err, NULL);
             if(native_env == NULL)
             {
-                p101_error_destroy(native_err);
-                _Exit(77);
+                native_child_status = 77;
+                goto native_child_done_;
             }
             int native_result = p101_setuid(native_env, native_err, 0);
             (void)native_result;
+            if(p101_error_has_error(native_err))
+            {
+                fprintf(stderr, "native smoke failed: p101_setuid: %s\n", p101_error_get_message(native_err));
+                native_passed = false;
+            }
+            native_child_status = native_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        native_child_done_:
             p101_env_destroy(native_env);
             p101_error_destroy(native_err);
-            _Exit(EXIT_SUCCESS);
         }
         if(native_pid > 0)
         {
-            EXPECT(waitpid(native_pid, &native_status, 0) == native_pid);
+            EXPECT(native_waitpid_nointr(native_pid, &native_status) == native_pid);
+            if(WIFSIGNALED(native_status))
+            {
+                fprintf(stderr, "native smoke terminated by signal: p101_setuid: %d\n", WTERMSIG(native_status));
+            }
             EXPECT(WIFEXITED(native_status));
             if(WIFEXITED(native_status))
             {
+                if(WEXITSTATUS(native_status) != EXIT_SUCCESS)
+                {
+                    fprintf(stderr, "native smoke exited unsuccessfully: p101_setuid: %d\n", WEXITSTATUS(native_status));
+                }
                 EXPECT(WEXITSTATUS(native_status) == EXIT_SUCCESS);
             }
         }
@@ -1307,8 +1676,9 @@ static void test_p101_setuid(struct p101_env *env, struct p101_error *err)
 int main(void)
 {
     const char        *outcome_path;
-    struct p101_error *err;
-    struct p101_env   *env;
+    struct p101_error *err = NULL;
+    struct p101_env   *env = NULL;
+    int                status;
 
     outcome_path = getenv("P101_WRAPPER_OUTCOME_LOG");
     if(outcome_path != NULL && outcome_path[0] != '\0')
@@ -1317,45 +1687,83 @@ int main(void)
         if(outcome_stream == NULL)
         {
             fprintf(stderr, "FAIL: cannot open wrapper outcome receipt\n");
-            return EXIT_FAILURE;
+            failures++;
         }
     }
-    err = p101_error_create(false);
-    if(err == NULL)
+    if(failures == 0)
     {
-        if(outcome_stream != NULL)
-        {
-            (void)fclose(outcome_stream);
-        }
-        return EXIT_FAILURE;
+        err = p101_error_create(false);
     }
-    env = p101_env_create(err, NULL);
+    if(err != NULL)
+    {
+        env = p101_env_create(err, NULL);
+    }
     if(env == NULL)
     {
-        p101_error_destroy(err);
-        if(outcome_stream != NULL)
-        {
-            (void)fclose(outcome_stream);
-        }
-        return EXIT_FAILURE;
+        failures++;
     }
-    p101_env_set_fd_observer(env, count_fd_event, NULL);
-    p101_env_set_alloc_observer(env, count_alloc_event, NULL);
-    p101_env_set_resource_observer(env, count_resource_event, NULL);
-    test_p101_crypt(env, err);
-    test_p101_getgrgid_r(env, err);
-    test_p101_getgrnam_r(env, err);
-    test_p101_getgroups(env, err);
-    test_p101_getlogin_r(env, err);
-    test_p101_getpwnam_r(env, err);
-    test_p101_getpwuid_r(env, err);
-    test_p101_pututxline(env, err);
-    test_p101_setegid(env, err);
-    test_p101_seteuid(env, err);
-    test_p101_setgid(env, err);
-    test_p101_setregid(env, err);
-    test_p101_setreuid(env, err);
-    test_p101_setuid(env, err);
+    else
+    {
+        p101_env_set_fd_observer(env, count_fd_event, NULL);
+        p101_env_set_alloc_observer(env, count_alloc_event, NULL);
+        p101_env_set_resource_observer(env, count_resource_event, NULL);
+        if(!native_child_process)
+        {
+            test_p101_crypt(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getgrgid_r(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getgrnam_r(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getgroups(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getlogin_r(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getpwnam_r(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_getpwuid_r(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_pututxline(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_setegid(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_seteuid(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_setgid(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_setregid(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_setreuid(env, err);
+        }
+        if(!native_child_process)
+        {
+            test_p101_setuid(env, err);
+        }
+    }
     p101_env_destroy(env);
     p101_error_destroy(err);
     if(outcome_stream != NULL && fclose(outcome_stream) != 0)
@@ -1363,5 +1771,17 @@ int main(void)
         fprintf(stderr, "FAIL: cannot close wrapper outcome receipt\n");
         failures++;
     }
-    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if(native_child_process)
+    {
+        status = native_child_status;
+        if(status == EXIT_SUCCESS && failures != 0)
+        {
+            status = EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        status = failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    return status;
 }
