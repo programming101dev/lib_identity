@@ -274,20 +274,16 @@ static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
             struct utmpx  native_argument_2 = {0};
             struct utmpx *native_result     = p101_pututxline(native_env, native_err, &native_argument_2);
             (void)native_result;
+            if(p101_error_has_error(native_err) && !p101_error_is_errno(native_err, EACCES) && !p101_error_is_errno(native_err, EPERM))
+            {
+                fprintf(stderr, "native smoke produced an undeclared conditional failure: p101_pututxline\n");
+                native_passed = false;
+            }
             if(p101_error_has_error(native_err))
             {
-                bool native_error_declared = false;
-
-                for(size_t native_error_index = 0U; native_error_index < sizeof(errors) / sizeof(errors[0]); native_error_index++)
+                if(native_result != NULL)
                 {
-                    if(p101_error_is_errno(native_err, errors[native_error_index]))
-                    {
-                        native_error_declared = true;
-                    }
-                }
-                if(!native_error_declared)
-                {
-                    fprintf(stderr, "native smoke produced an undeclared platform failure: p101_pututxline: %s\n", p101_error_get_message(native_err));
+                    fprintf(stderr, "native smoke returned an undeclared conditional result: p101_pututxline\n");
                     native_passed = false;
                 }
                 p101_error_reset(native_err);

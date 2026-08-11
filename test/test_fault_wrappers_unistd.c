@@ -667,7 +667,9 @@ static void test_p101_setegid(struct p101_env *env, struct p101_error *err)
                 native_child_status = 77;
                 goto native_child_done_;
             }
-            int native_result = p101_setegid(native_env, native_err, 0);
+            gid_t native_argument_2;
+            native_argument_2 = getegid();
+            int native_result = p101_setegid(native_env, native_err, native_argument_2);
             (void)native_result;
             if(p101_error_has_error(native_err))
             {
