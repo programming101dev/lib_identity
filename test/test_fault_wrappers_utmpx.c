@@ -197,8 +197,8 @@ static void count_resource_event(const struct p101_env *env, p101_env_resource_k
 static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
 {
 #ifdef __linux__
-    static const int         errors[]      = {EPERM};
-    static const char *const error_names[] = {"EPERM"};
+    static const int         errors[]      = {EACCES, EPERM};
+    static const char *const error_names[] = {"EACCES", "EPERM"};
 #elif defined(__APPLE__)
     static const int         errors[]      = {EINVAL, EPERM};
     static const char *const error_names[] = {"EINVAL", "EPERM"};
