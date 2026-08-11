@@ -271,12 +271,20 @@ static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
                 native_child_status = 77;
                 goto native_child_done_;
             }
-            struct utmpx  native_argument_2 = {0};
-            struct utmpx *native_result     = p101_pututxline(native_env, native_err, &native_argument_2);
+            struct utmpx native_argument_2 = {0};
+            native_argument_2.ut_type      = USER_PROCESS;
+            native_argument_2.ut_pid       = getpid();
+            native_argument_2.ut_line[0]   = 'p';
+            native_argument_2.ut_id[0]     = 'p';
+            native_argument_2.ut_user[0]   = 'p';
+            struct utmpx *native_result    = p101_pututxline(native_env, native_err, &native_argument_2);
             (void)native_result;
             if(p101_error_has_error(native_err) && !p101_error_is_errno(native_err, EINVAL) && !p101_error_is_errno(native_err, ESRCH) && !p101_error_is_errno(native_err, EPERM))
             {
-                fprintf(stderr, "native smoke produced an undeclared conditional failure: p101_pututxline\n");
+                const char *native_error_message;
+
+                native_error_message = p101_error_get_message(native_err);
+                fprintf(stderr, "native smoke produced an undeclared conditional failure: p101_pututxline: %s\n", native_error_message);
                 native_passed = false;
             }
             if(p101_error_has_error(native_err))
