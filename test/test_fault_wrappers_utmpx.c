@@ -274,7 +274,7 @@ static void test_p101_pututxline(struct p101_env *env, struct p101_error *err)
             struct utmpx  native_argument_2 = {0};
             struct utmpx *native_result     = p101_pututxline(native_env, native_err, &native_argument_2);
             (void)native_result;
-            if(p101_error_has_error(native_err) && !p101_error_is_errno(native_err, EACCES) && !p101_error_is_errno(native_err, EPERM))
+            if(p101_error_has_error(native_err) && !p101_error_is_errno(native_err, EINVAL) && !p101_error_is_errno(native_err, ESRCH) && !p101_error_is_errno(native_err, EPERM))
             {
                 fprintf(stderr, "native smoke produced an undeclared conditional failure: p101_pututxline\n");
                 native_passed = false;
